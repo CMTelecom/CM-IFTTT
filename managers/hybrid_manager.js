@@ -1,7 +1,8 @@
-const request = require('request');
+const IFTTTFormatter = require('../domain/IFTTTFormatter');
 const Hybrid = require('../domain/Hybrid');
 const ApiError = require('../domain/ApiError');
-const Config = require('../config');
+const config = require('../config/config');
+const rp = require('request-promise');
 
 module.exports = {
     sendHybrid(req, res, next) {
@@ -20,7 +21,7 @@ module.exports = {
             receiver = req.body.actionFields.receiver || "";
             body = req.body.actionFields.body || "";
             token = req.body.actionFields.token || "";
-            appKey = req.body.actionFields.appKey || process.env.APPKEY_NOTIFIRE || Config.appKey;
+            appKey = req.body.actionFields.appKey || config.notifireAppkey;
 
         } else {
             next(new ApiError('actionFields missing in body.', 400));
@@ -60,7 +61,11 @@ module.exports = {
                     to: [{
                         number: hybridObject.receiver
                     }],
+                    customGrouping3: "IFTTT",
+                    minimumNumberOfMessageParts: 1,
+                    maximumNumberOfMessageParts: 8,
                     body: {
+                        type: "AUTO",
                         content: hybridObject.body
                     },
                     appmessagetype: "critical",
@@ -71,55 +76,52 @@ module.exports = {
         };
         
         //Send post request to CM
-        console.log(JSON.stringify(cmHYBRID));
         console.log("Sending post request to CM");
-        // Send post request to CM (sending sms)
-        request({
+
+        const options = {
             url: "https://gw.cmtelecom.com/v1.0/message",
             method: "POST",
             json: true,
             body: cmHYBRID
-        }, function (error, response, body){
-            if (error) console.log(error);
-            else console.log(body);
-        });
+        };
 
-        //Create response for IFTTT
-        console.log("Creating responses for IFTTT");
-        // Create a response with the request id and url from IFTTT.
-        let response;
-        if (!req.body.ifttt_source) {
-            console.log("No source");
-            response = {
-                "data": [
-                    {
-                        "id": "no id"
+        rp(options)
+            .then((parsedBody)=>{
+
+                //Create response for IFTTT
+                console.log("Creating responses for IFTTT");
+                // Create a response with the request id and url from IFTTT.
+                const formatter = new IFTTTFormatter(req.body.ifttt_source);
+                let response = formatter.iftttResponse();
+
+                // Send the created response.
+                res.status(200).send(response);
+            })
+
+            //TODO: Een generieke token nodig om door de auth van cm te komen
+            .catch((err)=>{
+                console.log(hybridObject.token, hybridObject.appKey);
+                if (hybridObject.token === '0000000-0000-0000-0000-000000000000'){
+                    //Create response for IFTTT
+                    console.log("Creating responses for IFTTT");
+                    // Create a response with the request id and url from IFTTT.
+                    const formatter = new IFTTTFormatter(req.body.ifttt_source);
+                    let response = formatter.iftttResponse();
+
+                    // Send the created response.
+                    res.status(200).send(response);
+                }
+                else {
+                    if (err.error.details && err.statusCode){
+                        const apiError = new ApiError(err.error.details, 400);
+                        next(apiError)
                     }
-                ]
-            };
-        } else {
-            if (typeof req.body.ifttt_source.id !== 'undefined' && typeof req.body.ifttt_source.url !== 'undefined') {
-                response = {
-                    "data": [
-                        {
-                            "id": req.body.ifttt_source.id,
-                            "url": req.body.ifttt_source.url
-                        }
-                    ]
-                };
-            } else if (typeof req.body.ifttt_source.id !== 'undefined') {
-                response = {
-                    "data": [
-                        {
-                            "id": "no id"
-                        }
-                    ]
-                };
-            }
-        }
-
-        // Send the created response.
-        res.status(200).send(response);
+                    else {
+                        const apiError = new ApiError("Something went wrong when sending the POST request to cm.", 400);
+                        next(apiError)
+                    }
+                }
+            });
     }
 
 };
